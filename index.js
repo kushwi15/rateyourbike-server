@@ -76,7 +76,6 @@ const upload = multer({
   }
 });
 
-
 // Connect to MongoDB
 mongoose.connect(process.env.MONGODB_URI || 'mongodb://localhost:27017/rateyourbike')
   .then(() => console.log('Connected to MongoDB'))
@@ -84,14 +83,13 @@ mongoose.connect(process.env.MONGODB_URI || 'mongodb://localhost:27017/rateyourb
 
 // Define Bike Schema and Model
 const bikeSchema = new mongoose.Schema({
+  riderName: { type: String, required: true }, // Added as first field
   bikeName: { type: String, required: true },
   modelName: { type: String, required: true },
   purchaseYear: { type: Number, required: true },
   totalKM: { type: Number, default: 0 },
   bikeCost: { type: Number, required: true },
   costPerService: { type: Number, default: 0 },
-  minorRepairCost: { type: Number, default: 0 },
-  majorRepairCost: { type: Number, default: 0 },
   review: { type: String, required: true },
   rating: { type: Number, required: true, min: 1, max: 5 },
   worthTheCost: { type: String, enum: ['Yes', 'Definitely Yes', 'No'], default: 'Yes' },
@@ -162,21 +160,20 @@ app.get('/api/bikes/:id', async (req, res) => {
 app.post('/api/bikes/add', upload.array('bikeImages', 5), async (req, res) => {
   try {
     const {
+      riderName, // Added field
       bikeName,
       modelName,
       purchaseYear,
       totalKM,
       bikeCost,
       costPerService,
-      minorRepairCost,
-      majorRepairCost,
       review,
       rating,
       worthTheCost
     } = req.body;
 
     // Validate required fields
-    if (!bikeName || !modelName || !review || !rating || rating < 1 || rating > 5) {
+    if (!riderName || !bikeName || !modelName || !review || !rating || rating < 1 || rating > 5) {
       return res.status(400).json({ message: 'All required fields must be provided' });
     }
 
@@ -210,16 +207,16 @@ app.post('/api/bikes/add', upload.array('bikeImages', 5), async (req, res) => {
       })
     );
 
+    
     // Create new bike review
     const newBike = new Bike({
+      riderName, // Added field
       bikeName,
       modelName,
       purchaseYear: Number(purchaseYear),
       totalKM: Number(totalKM),
       bikeCost: Number(bikeCost),
       costPerService: Number(costPerService),
-      minorRepairCost: Number(minorRepairCost),
-      majorRepairCost: Number(majorRepairCost),
       review,
       rating: Number(rating),
       worthTheCost,
@@ -237,7 +234,6 @@ app.post('/api/bikes/add', upload.array('bikeImages', 5), async (req, res) => {
     res.status(500).json({ message: 'Server error' });
   }
 });
-
 
 // Socket.IO connection handler
 io.on('connection', (socket) => {
