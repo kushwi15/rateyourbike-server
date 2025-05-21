@@ -8,6 +8,11 @@ import { Server } from 'socket.io';
 import fs from 'fs';
 import sharp from 'sharp';
 import dotenv from 'dotenv';
+import { fileURLToPath } from 'url';
+
+// Fix __dirname for ES modules
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 // Load environment variables
 dotenv.config();
@@ -43,11 +48,9 @@ const storage = multer.diskStorage({
       return cb(new Error("Bike name and model are required"));
     }
 
-    // Create folder path based on bike name and model
     const folderName = `${bikeName.replace(/\s+/g, '')}-${modelName.replace(/\s+/g, '')}`;
     const folderPath = path.join(uploadsDir, folderName);
 
-    // Create the folder if it doesn't exist
     if (!fs.existsSync(folderPath)) {
       fs.mkdirSync(folderPath, { recursive: true });
     }
@@ -61,10 +64,10 @@ const storage = multer.diskStorage({
   }
 });
 
-const upload = multer({ 
-  storage, 
+const upload = multer({
+  storage,
   limits: {
-    fileSize: 5 * 1024 * 1024, // 5MB limit
+    fileSize: 5 * 1024 * 1024, // 5MB
   },
   fileFilter: (req, file, cb) => {
     const allowedTypes = ['image/jpeg', 'image/png', 'image/gif'];
@@ -76,14 +79,14 @@ const upload = multer({
   }
 });
 
-// Connect to MongoDB
-mongoose.connect(process.env.MONGODB_URI || 'mongodb://localhost:27017/rateyourbike')
+// MongoDB connection
+mongoose.connect(process.env.MONGODB_URI)
   .then(() => console.log('Connected to MongoDB'))
   .catch(err => console.error('MongoDB connection error:', err));
 
-// Define Bike Schema and Model
+// Bike schema and model
 const bikeSchema = new mongoose.Schema({
-  riderName: { type: String, required: true }, // Added as first field
+  riderName: { type: String, required: true },
   bikeName: { type: String, required: true },
   modelName: { type: String, required: true },
   purchaseYear: { type: Number, required: true },
@@ -97,16 +100,15 @@ const bikeSchema = new mongoose.Schema({
   createdAt: { type: Date, default: Date.now }
 });
 
-// Add text index for search functionality
+// Index for text search
 bikeSchema.index({ bikeName: 'text', modelName: 'text' });
 
 const Bike = mongoose.model('Bike', bikeSchema);
 
-// Serve uploaded files
-app.use('/uploads', express.static(uploadsDir));
+// Serve uploads statically
+app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 
-// API Routes
-// Get all bikes
+// Routes
 app.get('/api/bikes', async (req, res) => {
   try {
     const bikes = await Bike.find().sort({ createdAt: -1 });
@@ -117,22 +119,21 @@ app.get('/api/bikes', async (req, res) => {
   }
 });
 
-// Search bikes
 app.get('/api/bikes/search', async (req, res) => {
   try {
     const { query } = req.query;
-    
+
     if (!query) {
       return res.status(400).json({ message: 'Search query is required' });
     }
-    
+
     const bikes = await Bike.find({
       $or: [
         { bikeName: { $regex: query, $options: 'i' } },
         { modelName: { $regex: query, $options: 'i' } }
       ]
     }).sort({ createdAt: -1 }).limit(10);
-    
+
     res.json(bikes);
   } catch (err) {
     console.error('Error searching bikes:', err);
@@ -140,15 +141,12 @@ app.get('/api/bikes/search', async (req, res) => {
   }
 });
 
-// Get bike by ID
 app.get('/api/bikes/:id', async (req, res) => {
   try {
     const bike = await Bike.findById(req.params.id);
-    
     if (!bike) {
       return res.status(404).json({ message: 'Bike review not found' });
     }
-    
     res.json(bike);
   } catch (err) {
     console.error('Error fetching bike:', err);
@@ -156,11 +154,10 @@ app.get('/api/bikes/:id', async (req, res) => {
   }
 });
 
-// Add new bike review
 app.post('/api/bikes/add', upload.array('bikeImages', 5), async (req, res) => {
   try {
     const {
-      riderName, // Added field
+      riderName,
       bikeName,
       modelName,
       purchaseYear,
@@ -172,23 +169,19 @@ app.post('/api/bikes/add', upload.array('bikeImages', 5), async (req, res) => {
       worthTheCost
     } = req.body;
 
-    // Validate required fields
     if (!riderName || !bikeName || !modelName || !review || !rating || rating < 1 || rating > 5) {
       return res.status(400).json({ message: 'All required fields must be provided' });
     }
 
-    // Process uploaded images
     const files = req.files;
 
     if (!files || files.length < 3) {
       return res.status(400).json({ message: 'At least 3 images are required' });
     }
 
-    // Folder path
     const folderName = `${bikeName.replace(/\s+/g, '')}-${modelName.replace(/\s+/g, '')}`;
     const folderPath = path.join(uploadsDir, folderName);
 
-    // Compress and process images
     const processedImagePaths = await Promise.all(
       files.map(async (file) => {
         const outputFilename = 'compressed-' + file.filename;
@@ -199,18 +192,13 @@ app.post('/api/bikes/add', upload.array('bikeImages', 5), async (req, res) => {
           .jpeg({ quality: 80 })
           .toFile(outputPath);
 
-        // Delete original file to save space
         fs.unlinkSync(file.path);
-
-        // Return path relative to the uploads directory
         return `/uploads/${folderName}/${outputFilename}`;
       })
     );
 
-    
-    // Create new bike review
     const newBike = new Bike({
-      riderName, // Added field
+      riderName,
       bikeName,
       modelName,
       purchaseYear: Number(purchaseYear),
@@ -225,7 +213,6 @@ app.post('/api/bikes/add', upload.array('bikeImages', 5), async (req, res) => {
 
     await newBike.save();
 
-    // Emit new review event to all connected clients
     io.emit('newReview', newBike);
 
     res.status(201).json(newBike);
@@ -235,16 +222,16 @@ app.post('/api/bikes/add', upload.array('bikeImages', 5), async (req, res) => {
   }
 });
 
-// Socket.IO connection handler
+// Socket.IO
 io.on('connection', (socket) => {
   console.log('New client connected');
-  
+
   socket.on('disconnect', () => {
     console.log('Client disconnected');
   });
 });
 
-// Start the server
+// Start server
 server.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
