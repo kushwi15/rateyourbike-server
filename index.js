@@ -1,23 +1,17 @@
 import express from 'express';
 import mongoose from 'mongoose';
 import multer from 'multer';
-import path from 'path';
 import cors from 'cors';
 import http from 'http';
 import { Server } from 'socket.io';
-import fs from 'fs';
-import sharp from 'sharp';
 import dotenv from 'dotenv';
-import { fileURLToPath } from 'url';
+import { v2 as cloudinary } from 'cloudinary';
+import { CloudinaryStorage } from 'multer-storage-cloudinary';
 
-// Fix __dirname for ES modules
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-
-// Load environment variables
+// Setup environment
 dotenv.config();
 
-// Create Express app
+// Express app
 const app = express();
 const PORT = process.env.PORT || 5000;
 
@@ -34,34 +28,30 @@ const io = new Server(server, {
 app.use(cors());
 app.use(express.json());
 
-// Create uploads directory if it doesn't exist
-const uploadsDir = path.join(process.cwd(), 'uploads');
-if (!fs.existsSync(uploadsDir)) {
-  fs.mkdirSync(uploadsDir, { recursive: true });
-}
+// Cloudinary configuration
+cloudinary.config({
+  cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
+  api_key: process.env.CLOUDINARY_API_KEY,
+  api_secret: process.env.CLOUDINARY_API_SECRET,
+});
 
-// Configure Multer for file uploads
-const storage = multer.diskStorage({
-  destination: (req, file, cb) => {
+// Multer Cloudinary storage config
+const storage = new CloudinaryStorage({
+  cloudinary,
+  params: async (req, file) => {
     const { bikeName, modelName } = req.body;
+
     if (!bikeName || !modelName) {
-      return cb(new Error("Bike name and model are required"));
+      throw new Error('Bike name and model are required');
     }
 
     const folderName = `${bikeName.replace(/\s+/g, '')}-${modelName.replace(/\s+/g, '')}`;
-    const folderPath = path.join(uploadsDir, folderName);
-
-    if (!fs.existsSync(folderPath)) {
-      fs.mkdirSync(folderPath, { recursive: true });
-    }
-
-    cb(null, folderPath);
+    return {
+      folder: `bike-reviews/${folderName}`,
+      format: 'jpeg',
+      public_id: `${Date.now()}-${Math.round(Math.random() * 1E9)}`
+    };
   },
-  filename: (req, file, cb) => {
-    const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
-    const ext = path.extname(file.originalname);
-    cb(null, uniqueSuffix + ext);
-  }
 });
 
 const upload = multer({
@@ -76,7 +66,7 @@ const upload = multer({
     } else {
       cb(new Error('Invalid file type. Only JPEG, PNG, and GIF are allowed.'));
     }
-  }
+  },
 });
 
 // MongoDB connection
@@ -84,7 +74,7 @@ mongoose.connect(process.env.MONGODB_URI)
   .then(() => console.log('Connected to MongoDB'))
   .catch(err => console.error('MongoDB connection error:', err));
 
-// Bike schema and model
+// Bike Schema and Model
 const bikeSchema = new mongoose.Schema({
   riderName: { type: String, required: true },
   bikeName: { type: String, required: true },
@@ -100,13 +90,9 @@ const bikeSchema = new mongoose.Schema({
   createdAt: { type: Date, default: Date.now }
 });
 
-// Index for text search
 bikeSchema.index({ bikeName: 'text', modelName: 'text' });
 
 const Bike = mongoose.model('Bike', bikeSchema);
-
-// Serve uploads statically
-app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 
 // Routes
 app.get('/api/bikes', async (req, res) => {
@@ -122,7 +108,6 @@ app.get('/api/bikes', async (req, res) => {
 app.get('/api/bikes/search', async (req, res) => {
   try {
     const { query } = req.query;
-
     if (!query) {
       return res.status(400).json({ message: 'Search query is required' });
     }
@@ -174,28 +159,11 @@ app.post('/api/bikes/add', upload.array('bikeImages', 5), async (req, res) => {
     }
 
     const files = req.files;
-
     if (!files || files.length < 3) {
       return res.status(400).json({ message: 'At least 3 images are required' });
     }
 
-    const folderName = `${bikeName.replace(/\s+/g, '')}-${modelName.replace(/\s+/g, '')}`;
-    const folderPath = path.join(uploadsDir, folderName);
-
-    const processedImagePaths = await Promise.all(
-      files.map(async (file) => {
-        const outputFilename = 'compressed-' + file.filename;
-        const outputPath = path.join(folderPath, outputFilename);
-
-        await sharp(file.path)
-          .resize(1200, 900, { fit: 'inside', withoutEnlargement: true })
-          .jpeg({ quality: 80 })
-          .toFile(outputPath);
-
-        fs.unlinkSync(file.path);
-        return `/uploads/${folderName}/${outputFilename}`;
-      })
-    );
+    const imageUrls = files.map(file => file.path);
 
     const newBike = new Bike({
       riderName,
@@ -208,13 +176,12 @@ app.post('/api/bikes/add', upload.array('bikeImages', 5), async (req, res) => {
       review,
       rating: Number(rating),
       worthTheCost,
-      images: processedImagePaths
+      images: imageUrls
     });
 
     await newBike.save();
 
     io.emit('newReview', newBike);
-
     res.status(201).json(newBike);
   } catch (err) {
     console.error('Error adding bike review:', err);
@@ -225,7 +192,6 @@ app.post('/api/bikes/add', upload.array('bikeImages', 5), async (req, res) => {
 // Socket.IO
 io.on('connection', (socket) => {
   console.log('New client connected');
-
   socket.on('disconnect', () => {
     console.log('Client disconnected');
   });
